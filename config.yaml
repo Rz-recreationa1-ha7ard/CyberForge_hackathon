@@ -3,8 +3,7 @@ tier: "recon"
 
 scope:
   allowed_cidrs:
-    - "127.0.0.1/32"
-    - "192.168.1.0/24"
+    - "192.168.60.0/24"
   allowed_ports: null
   max_scan_timeout_seconds: 1200
 
@@ -22,8 +21,8 @@ agents:
     triggers:
       - "startup"
     parameters:
-      scan_speed: "fast"
-      top_ports: 100
+      socket_timeout: 0.4
+      max_threads: 50
 
   - name: "web_agent"
     role: "Web Application Surface Analyzer"
@@ -34,27 +33,5 @@ agents:
       - "service:https"
     parameters:
       max_crawl_depth: 2
+      request_timeout_seconds: 3
       user_agent: "CyberForge-Auditor/1.0"
-
-  - name: "binary_agent"
-    role: "Static Binary Analyzer"
-    surface: "binary"
-    enabled: true
-    triggers:
-      - "asset:binary"
-    parameters:
-      inspect_strings: true
-      unsafe_functions:
-        - "strcpy"
-        - "gets"
-        - "system"
-
-  - name: "verification_agent"
-    role: "Finding Verification Engine"
-    surface: "network"
-    enabled: true
-    triggers:
-      - "finding:unverified"
-    parameters:
-      retry_count: 2
-

@@ -41,12 +41,16 @@ class Orchestrator:
     def _bootstrap_agents(self) -> None:
         """Dynamically instantiate configured agents based on config.yaml (Bonus B-4)."""
         from cyberforge.agents.web_agent import WebAgent
+        from cyberforge.agents.network_agent import NetworkDiscoveryAgent
 
         for agent_cfg in self.config.agents:
             if not agent_cfg.enabled:
                 continue
 
-            if agent_cfg.name == "web_agent":
+            if agent_cfg.name == "network_discovery":
+                agent = NetworkDiscoveryAgent(agent_cfg, self.state, self.scope_gate)
+                self.register_agent(agent)
+            elif agent_cfg.name == "web_agent":
                 agent = WebAgent(agent_cfg, self.state, self.scope_gate)
                 self.register_agent(agent)
 
