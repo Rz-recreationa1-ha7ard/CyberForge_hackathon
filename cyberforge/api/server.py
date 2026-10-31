@@ -1,3 +1,4 @@
+import re
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse, PlainTextResponse
 from typing import List, Dict, Any, Optional
@@ -384,10 +385,307 @@ def get_report_json():
     return report_gen.generate_json_data()
 
 
-@app.get("/report/markdown", response_class=PlainTextResponse)
-def get_report_markdown():
-    """Full assessment report in Markdown format."""
+def render_report_html(md_text: str, project_name: str = "CyberForge Assessment") -> str:
+    # 1. Protect code blocks
+    code_blocks = []
+    def save_code(m):
+        code_blocks.append(m.group(1))
+        return f"___CODE_BLOCK_{len(code_blocks)-1}___"
+    
+    text = re.sub(r'```([\s\S]*?)```', save_code, md_text)
+    
+    # 2. Convert badges
+    text = re.sub(r'\[\[CRITICAL\]\]', '<span class="badge badge-critical">CRITICAL</span>', text)
+    text = re.sub(r'\[\[CONFIRMED\]\]', '<span class="badge badge-confirmed">CONFIRMED</span>', text)
+    text = re.sub(r'\[\[HIGH\]\]', '<span class="badge badge-high">HIGH</span>', text)
+    text = re.sub(r'\[\[MEDIUM\]\]', '<span class="badge badge-medium">MEDIUM</span>', text)
+    text = re.sub(r'\[\[LOW\]\]', '<span class="badge badge-low">LOW</span>', text)
+
+    lines = text.split('\n')
+    out = []
+    in_table = False
+    in_list = False
+
+    for line in lines:
+        s = line.strip()
+        
+        # Table rows
+        if s.startswith('|') and s.endswith('|'):
+            if in_list:
+                out.append('</ul>')
+                in_list = False
+            if re.match(r'^\|[\s:-|]+\|$', s):
+                continue
+            cells = [c.strip() for c in s[1:-1].split('|')]
+            if not in_table:
+                in_table = True
+                out.append('<table><thead><tr>' + ''.join(f'<th>{c}</th>' for c in cells) + '</tr></thead><tbody>')
+            else:
+                out.append('<tr>' + ''.join(f'<td>{c}</td>' for c in cells) + '</tr>')
+            continue
+        elif in_table:
+            out.append('</tbody></table>')
+            in_table = False
+
+        # Lists
+        if s.startswith('- ') or s.startswith('* '):
+            if not in_list:
+                in_list = True
+                out.append('<ul>')
+            item_text = s[2:]
+            out.append(f'<li>{item_text}</li>')
+            continue
+        elif in_list:
+            out.append('</ul>')
+            in_list = False
+
+        # Headers
+        if s.startswith('# '):
+            out.append(f'<h1>{s[2:]}</h1>')
+        elif s.startswith('## '):
+            out.append(f'<h2>{s[3:]}</h2>')
+        elif s.startswith('### '):
+            out.append(f'<h3>{s[4:]}</h3>')
+        elif s == '---':
+            out.append('<hr>')
+        elif s.startswith('> '):
+            out.append(f'<blockquote>{s[2:]}</blockquote>')
+        elif s.startswith('___CODE_BLOCK_'):
+            idx = int(s.split('___CODE_BLOCK_')[1].split('___')[0])
+            escaped_code = code_blocks[idx].replace('<', '&lt;').replace('>', '&gt;').strip()
+            out.append(f'<pre><code>{escaped_code}</code></pre>')
+        elif s:
+            out.append(f'<p>{line}</p>')
+        else:
+            out.append('')
+
+    if in_table:
+        out.append('</tbody></table>')
+    if in_list:
+        out.append('</ul>')
+
+    body_html = '\n'.join(out)
+    
+    # Restore code blocks
+    for i, cb in enumerate(code_blocks):
+        escaped_code = cb.replace('<', '&lt;').replace('>', '&gt;').strip()
+        body_html = body_html.replace(f"___CODE_BLOCK_{i}___", f"<pre><code>{escaped_code}</code></pre>")
+
+    # Inline markdown formatting
+    body_html = re.sub(r'\*\*(.*?)\*\*', r'<strong>\1</strong>', body_html)
+    body_html = re.sub(r'(?<!\*)\*(?!\*)(.*?)(?<!\*)\*(?!\*)', r'<em>\1</em>', body_html)
+    body_html = re.sub(r'`([^`]+)`', r'<code>\1</code>', body_html)
+
+    full_html = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>{project_name} -- PTES Security Assessment Report</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
+        :root {{
+            --bg: #0f172a;
+            --card: #1e293b;
+            --border: #334155;
+            --text: #e2e8f0;
+            --muted: #94a3b8;
+            --accent: #38bdf8;
+        }}
+        body {{
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            margin: 0;
+            padding: 2rem 1rem;
+            line-height: 1.75;
+            font-size: 16px;
+        }}
+        .report-wrapper {{
+            max-width: 960px;
+            margin: 0 auto;
+        }}
+        .report-nav {{
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            background: var(--card);
+            border: 1px solid var(--border);
+            padding: 1rem 1.5rem;
+            border-radius: 10px;
+            margin-bottom: 2rem;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+        }}
+        .nav-btn {{
+            background: #0284c7;
+            color: #ffffff;
+            text-decoration: none;
+            padding: 8px 16px;
+            border-radius: 6px;
+            font-weight: 600;
+            font-size: 0.9rem;
+            border: none;
+            cursor: pointer;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+        }}
+        .nav-btn:hover {{ background: #0369a1; }}
+        .nav-btn-secondary {{
+            background: #334155;
+            color: #f8fafc;
+        }}
+        .nav-btn-secondary:hover {{ background: #475569; }}
+        .report-sheet {{
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 3rem;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.4);
+        }}
+        h1 {{
+            font-size: 2.1rem;
+            color: #f8fafc;
+            border-bottom: 2px solid var(--accent);
+            padding-bottom: 0.75rem;
+            margin-top: 0;
+            letter-spacing: -0.02em;
+        }}
+        h2 {{
+            font-size: 1.45rem;
+            color: var(--accent);
+            border-bottom: 1px solid var(--border);
+            padding-bottom: 0.5rem;
+            margin-top: 2.25rem;
+            letter-spacing: -0.01em;
+        }}
+        h3 {{
+            font-size: 1.2rem;
+            color: #7dd3fc;
+            margin-top: 1.75rem;
+        }}
+        p, li {{
+            color: #cbd5e1;
+            font-size: 1.02rem;
+        }}
+        strong {{ color: #ffffff; font-weight: 600; }}
+        hr {{
+            border: none;
+            border-top: 1px solid var(--border);
+            margin: 2rem 0;
+        }}
+        table {{
+            width: 100%;
+            border-collapse: collapse;
+            margin: 1.5rem 0;
+            font-size: 0.95rem;
+            background: #0f172a;
+            border-radius: 8px;
+            overflow: hidden;
+            border: 1px solid var(--border);
+        }}
+        th, td {{
+            padding: 0.85rem 1rem;
+            text-align: left;
+            border-bottom: 1px solid var(--border);
+            border-right: 1px solid var(--border);
+        }}
+        th:last-child, td:last-child {{ border-right: none; }}
+        th {{
+            background: #090d16;
+            color: #94a3b8;
+            font-size: 0.8rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            font-weight: 700;
+        }}
+        tr:nth-child(even) {{ background: #131b2e; }}
+        tr:hover {{ background: #1e293b; }}
+        code {{
+            background: #0f172a;
+            color: #38bdf8;
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+            font-size: 0.9em;
+            border: 1px solid #334155;
+        }}
+        pre {{
+            background: #090d16;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 1.25rem;
+            overflow-x: auto;
+            margin: 1.25rem 0;
+        }}
+        pre code {{
+            background: transparent;
+            padding: 0;
+            border: none;
+            color: #7dd3fc;
+            font-size: 0.92rem;
+        }}
+        blockquote {{
+            margin: 1.25rem 0;
+            padding: 1rem 1.25rem;
+            background: #090d16;
+            border-left: 4px solid var(--accent);
+            border-radius: 0 8px 8px 0;
+            color: #94a3b8;
+            font-style: italic;
+        }}
+        ul {{ padding-left: 1.5rem; }}
+        li {{ margin-bottom: 0.4rem; }}
+        .badge {{
+            padding: 3px 8px;
+            border-radius: 4px;
+            font-size: 0.78rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            display: inline-block;
+        }}
+        .badge-critical {{ background: #7f1d1d; color: #fecaca; border: 1px solid #ef4444; }}
+        .badge-high {{ background: #7c2d12; color: #fed7aa; border: 1px solid #f97316; }}
+        .badge-medium {{ background: #713f12; color: #fef08a; border: 1px solid #eab308; }}
+        .badge-low {{ background: #14532d; color: #bbf7d0; border: 1px solid #22c55e; }}
+        .badge-confirmed {{ background: #14532d; color: #bbf7d0; border: 1px solid #22c55e; }}
+        @media print {{
+            body {{ background: #ffffff; color: #000000; padding: 0; }}
+            .report-nav {{ display: none; }}
+            .report-sheet {{ background: #ffffff; border: none; box-shadow: none; padding: 0; }}
+            h1, h2, h3, strong {{ color: #000000; }}
+            p, li {{ color: #222222; }}
+            table {{ background: #ffffff; border-color: #cccccc; }}
+            th {{ background: #f0f0f0; color: #333333; }}
+            tr:nth-child(even) {{ background: #fbfbfb; }}
+            pre, code, blockquote {{ background: #f8f8f8; border-color: #dddddd; color: #111111; }}
+        }}
+    </style>
+</head>
+<body>
+    <div class="report-wrapper">
+        <div class="report-nav">
+            <a href="/" class="nav-btn">← Back to Dashboard</a>
+            <div style="display:flex; gap:8px;">
+                <button onclick="window.print()" class="nav-btn nav-btn-secondary">🖨️ Print / Save PDF</button>
+                <a href="/report/markdown?raw=true" class="nav-btn nav-btn-secondary">📄 View Raw Markdown</a>
+            </div>
+        </div>
+        <div class="report-sheet">
+            {body_html}
+        </div>
+    </div>
+</body>
+</html>"""
+    return full_html
+
+
+@app.get("/report/markdown")
+def get_report_markdown(raw: bool = False):
+    """Full assessment report in stylized HTML format, or raw markdown if requested (?raw=true)."""
     if not report_gen:
         raise HTTPException(status_code=503, detail="Report generator uninitialized")
-    return report_gen.generate_markdown_report()
+    md_content = report_gen.generate_markdown_report()
+    if raw:
+        return PlainTextResponse(md_content)
+    return HTMLResponse(content=render_report_html(md_content, project_name=report_gen.project_name))
 
