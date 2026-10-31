@@ -1,0 +1,14 @@
+version: '3.8'
+
+services:
+  cyberforge:
+    build: .
+    container_name: cyberforge-engine
+    network_mode: "host"
+    volumes:
+      - ./reports:/app/reports
+      - ./config.yaml:/app/config.yaml
+    environment:
+      - PYTHONUNBUFFERED=1
+    command: ["--config", "config.yaml", "--tier", "recon"]
+
