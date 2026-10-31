@@ -61,11 +61,15 @@ class TestWebAgent(unittest.TestCase):
                 <html>
                     <body>
                         <a href="/login">Login</a>
+                        <a href="/search?q=test">Search</a>
                         <!-- flag{web_surface_ctf_solved_2026} -->
                     </body>
                 </html>
                 """
                 return (200, headers, body)
+            elif "/search" in url:
+                param_val = url.split("q=")[-1] if "q=" in url else ""
+                return (200, {}, f"<html><body>Results for: {param_val}</body></html>")
             elif url == "http://127.0.0.1:8080/login":
                 headers = {"Content-Type": "text/html"}
                 body = """
@@ -99,6 +103,9 @@ class TestWebAgent(unittest.TestCase):
 
         # Verify login form discovered
         self.assertIn("discovered_form", finding_types)
+
+        # Verify reflected input discovered (FR-2: a form/param that echoes input)
+        self.assertIn("reflected_input", finding_types)
 
         # Verify exposed path /admin discovered
         self.assertIn("exposed_path", finding_types)

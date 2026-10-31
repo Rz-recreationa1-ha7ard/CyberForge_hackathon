@@ -151,3 +151,4 @@ class NetworkDiscoveryAgent(BaseAgent):
                     self.logger.debug(f"Scan error on {ip}: {e}")
 
         self.logger.info(f"Network discovery complete. Discovered {discovered_count} live hosts on {target_cidr}.")
+

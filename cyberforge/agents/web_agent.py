@@ -1,4 +1,5 @@
 import re
+import uuid
 import urllib.request
 import urllib.parse
 import urllib.error
@@ -281,6 +282,12 @@ class WebAgent(BaseAgent):
                     remediation="Ensure proper rate-limiting, CSRF tokens, and MFA on login forms."
                 )
 
+                # Check form inputs for reflection (FR-2: a form that echoes input)
+                self._check_form_reflection(host, port, form)
+
+            # Check query parameters for reflection (FR-2)
+            self._check_url_reflection(host, port, curr_url)
+
             # Queue child links if depth allows
             if depth < self.max_depth:
                 for link in parser.links:
@@ -291,4 +298,69 @@ class WebAgent(BaseAgent):
                         if child_res:
                             self._check_for_flag(host, port, child_res[2], link)
                             queue.append((link, depth + 1, child_res))
+
+    def _check_url_reflection(self, host: TargetHost, port: int, url: str) -> None:
+        """Tests whether query parameters echo input back in response (FR-2)."""
+        parsed = urllib.parse.urlparse(url)
+        if not parsed.query:
+            return
+
+        query_dict = urllib.parse.parse_qs(parsed.query)
+        for param in query_dict.keys():
+            marker = f"cf_probe_{uuid.uuid4().hex[:6]}"
+            test_query = dict(query_dict)
+            test_query[param] = [marker]
+            encoded_query = urllib.parse.urlencode(test_query, doseq=True)
+            test_url = urllib.parse.urlunparse(parsed._replace(query=encoded_query))
+
+            res = self._fetch(test_url)
+            if res and marker in res[2]:
+                self.state.add_finding(
+                    host_id=host.host_id,
+                    host_ip=host.ip,
+                    port=port,
+                    surface=SurfaceType.WEB,
+                    ptes_phase=PTESPhase.VULNERABILITY_ANALYSIS,
+                    finding_type="reflected_input",
+                    title=f"Reflected Input in Query Parameter: {param}",
+                    description=f"The endpoint {url} reflects user-supplied data from parameter '{param}' unescaped in response.",
+                    evidence=f"Target URL: {test_url}\nMarker: {marker} echoed in response body.",
+                    verified=True,
+                    status=FindingStatus.CONFIRMED,
+                    remediation="Apply contextual HTML entity encoding to user parameters before rendering in responses."
+                )
+
+    def _check_form_reflection(self, host: TargetHost, port: int, form: Dict[str, Any]) -> None:
+        """Tests whether form inputs echo input back in response (FR-2: a form that echoes input)."""
+        action_url = form.get("action")
+        method = form.get("method", "GET").upper()
+        inputs = form.get("inputs", [])
+
+        text_inputs = [i["name"] for i in inputs if i.get("type") in ("text", "search", "query", "")]
+        if not text_inputs:
+            return
+
+        for param in text_inputs:
+            marker = f"cf_probe_{uuid.uuid4().hex[:6]}"
+            if method == "GET":
+                parsed = urllib.parse.urlparse(action_url)
+                test_query = {param: marker}
+                encoded_query = urllib.parse.urlencode(test_query)
+                test_url = urllib.parse.urlunparse(parsed._replace(query=encoded_query))
+                res = self._fetch(test_url)
+                if res and marker in res[2]:
+                    self.state.add_finding(
+                        host_id=host.host_id,
+                        host_ip=host.ip,
+                        port=port,
+                        surface=SurfaceType.WEB,
+                        ptes_phase=PTESPhase.VULNERABILITY_ANALYSIS,
+                        finding_type="reflected_input",
+                        title=f"Reflected Form Input: {param}",
+                        description=f"Form at {action_url} echoes input value '{marker}' in response.",
+                        evidence=f"Form Action: {action_url}, Field: {param}\nMarker: {marker} reflected in response.",
+                        verified=True,
+                        status=FindingStatus.CONFIRMED,
+                        remediation="Apply proper contextual output encoding to form inputs rendered in the response."
+                    )
 

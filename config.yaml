@@ -35,3 +35,12 @@ agents:
       max_crawl_depth: 2
       request_timeout_seconds: 3
       user_agent: "CyberForge-Auditor/1.0"
+
+  - name: "verification_agent"
+    role: "Finding Verification & False-Alarm Eliminator"
+    surface: "web"
+    enabled: true
+    triggers:
+      - "finding:unverified"
+    parameters:
+      timeout_seconds: 3

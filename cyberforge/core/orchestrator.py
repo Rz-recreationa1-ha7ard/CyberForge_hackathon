@@ -42,6 +42,7 @@ class Orchestrator:
         """Dynamically instantiate configured agents based on config.yaml (Bonus B-4)."""
         from cyberforge.agents.web_agent import WebAgent
         from cyberforge.agents.network_agent import NetworkDiscoveryAgent
+        from cyberforge.agents.verification_agent import VerificationAgent
 
         for agent_cfg in self.config.agents:
             if not agent_cfg.enabled:
@@ -52,6 +53,9 @@ class Orchestrator:
                 self.register_agent(agent)
             elif agent_cfg.name == "web_agent":
                 agent = WebAgent(agent_cfg, self.state, self.scope_gate)
+                self.register_agent(agent)
+            elif agent_cfg.name == "verification_agent":
+                agent = VerificationAgent(agent_cfg, self.state, self.scope_gate)
                 self.register_agent(agent)
 
     def register_agent(self, agent: BaseAgent) -> None:
@@ -130,10 +134,9 @@ class Orchestrator:
         # Step 3: Run verification engine if registered (FR-6)
         verifier = self._agent_registry.get("verification_agent")
         if verifier:
-            logger.info("Dispatching Verification Engine for unverified findings...")
-            for f in self.state.get_findings():
-                if not f.verified:
-                    verifier.execute(f)
+            logger.info("Dispatching Verification Engine (FR-6) for unverified findings...")
+            for host in hosts:
+                verifier.execute(host)
 
         # Step 4: Final Reporting (FR-7)
         logger.info("Generating assessment reports...")
