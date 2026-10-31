@@ -1,0 +1,31 @@
+# scope.yaml - CyberForge CTF Exercise Scope Definition
+# All automated tooling and agents must strictly respect these boundaries.
+
+network_ranges:
+  - 10.10.10.0/24
+  - 172.16.20.0/24
+  - 192.168.1.0/24
+
+excluded:
+  - 10.10.10.1      # CTF scoring engine / gateway
+  - 10.10.10.254    # Infrastructure router
+  - 192.168.1.1     # Lab gateway
+
+binaries:
+  - /usr/bin/nmap
+  - /usr/bin/sqlmap
+  - /usr/bin/nikto
+  - /bin/ping
+  - nmap
+  - nmap.exe
+  - ping
+  - ping.exe
+  - file
+  - file.exe
+  - strings
+  - strings.exe
+  - checksec
+  - sample_bin
+  - sample_bin.exe
+  - /opt/ctf/sample_bin
+

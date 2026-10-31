@@ -7,5 +7,9 @@ env/
 venv/
 reports/*.json
 reports/*.md
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
 .DS_Store
-
