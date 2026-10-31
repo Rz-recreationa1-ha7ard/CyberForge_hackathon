@@ -28,7 +28,8 @@ class TestCyberForgeCore(unittest.TestCase):
             gate.enforce_scope("10.0.0.1")
 
     def test_shared_state_and_coordination(self):
-        state = SharedState()
+        gate = ScopeGate(allowed_cidrs=["192.168.10.0/24"])
+        state = SharedState(scope_gate=gate)
 
         # Register host
         host = state.register_or_update_host(
@@ -51,7 +52,8 @@ class TestCyberForgeCore(unittest.TestCase):
         self.assertTrue(state.is_surface_tested(host.host_id, "web"))
 
     def test_findings_and_verification(self):
-        state = SharedState()
+        gate = ScopeGate(allowed_cidrs=["192.168.10.0/24"])
+        state = SharedState(scope_gate=gate)
         host = state.register_or_update_host(ip="192.168.10.5")
 
         # Add finding
@@ -107,7 +109,8 @@ class TestCyberForgeCore(unittest.TestCase):
         self.assertEqual(json_data["summary"]["total_findings"], 1)
 
         md = reporter.generate_markdown_report()
-        self.assertIn("Test Assessment — Security Assessment Report", md)
+        self.assertIn("Test Assessment", md)
+        self.assertIn("Security Assessment Report", md)
         self.assertIn("192.168.10.20", md)
 
 

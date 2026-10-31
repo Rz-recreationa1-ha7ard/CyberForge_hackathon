@@ -1,3 +1,4 @@
+import logging
 import threading
 import uuid
 from typing import Dict, List, Optional, Any, Callable
@@ -11,32 +12,65 @@ from cyberforge.core.models import (
     PTESPhase,
     AttackPathStep,
 )
+from cyberforge.core.scope_gate import ScopeGate, ScopeViolationError
+
+logger = logging.getLogger("SharedState")
 
 
 class SharedState:
     """
     Central blackboard / coordinator state store (FR-4).
     Thread-safe storage for hosts, services, findings, and attack paths.
-    Enables handoffs and deduplication between specialized agents.
+    Enforces strict scope gatekeeping on all host and finding writes.
     """
 
-    def __init__(self):
+    def __init__(self, scope_gate: Optional[ScopeGate] = None):
         self._lock = threading.RLock()
+        self.scope_gate = scope_gate
         self._hosts: Dict[str, TargetHost] = {}  # host_id -> TargetHost
         self._findings: Dict[str, Finding] = {}  # finding_id -> Finding
         self._attack_path: List[AttackPathStep] = []
+        self._intel: Dict[str, Any] = {}  # Cross-agent shared intelligence blackboard
         self._event_listeners: Dict[str, List[Callable[[Dict[str, Any]], None]]] = {}
+
+    def set_intel(self, key: str, value: Any) -> None:
+        """Stores shared intelligence or artifacts for cross-agent collaboration (FR-4)."""
+        with self._lock:
+            self._intel[key] = value
+
+    def get_intel(self, key: str, default: Any = None) -> Any:
+        """Retrieves shared intelligence stored by another agent."""
+        with self._lock:
+            return self._intel.get(key, default)
 
     # --- Target Management & Coordination (FR-4) ---
 
-    def register_or_update_host(self, ip: str, hostname: Optional[str] = None, ports: Optional[List[PortService]] = None) -> TargetHost:
+    def register_or_update_host(
+        self,
+        ip: str,
+        hostname: Optional[str] = None,
+        ports: Optional[List[PortService]] = None,
+        mac_address: Optional[str] = None,
+        mac_vendor: Optional[str] = None
+    ) -> TargetHost:
         with self._lock:
+            # Hard Scope Gatekeeper check: Reject out-of-scope host registrations
+            if self.scope_gate and not self.scope_gate.is_in_scope(ip):
+                msg = f"SCOPE VIOLATION BLOCKED: Host {ip} is OUT OF SCOPE. Registration rejected."
+                logger.critical(msg)
+                raise ScopeViolationError(msg)
             # Check if host already exists by IP
             for existing in self._hosts.values():
                 if existing.ip == ip:
                     if hostname and not existing.hostname:
                         existing.hostname = hostname
+                    if mac_address and not existing.mac_address:
+                        existing.mac_address = mac_address
+                    if mac_vendor and not existing.mac_vendor:
+                        existing.mac_vendor = mac_vendor
                     if ports:
+                        if "network" not in existing.tested_surfaces:
+                            existing.tested_surfaces.append("network")
                         existing_port_nums = {p.port for p in existing.ports}
                         for p in ports:
                             if p.port not in existing_port_nums:
@@ -48,8 +82,11 @@ class SharedState:
             target = TargetHost(
                 host_id=host_id,
                 ip=ip,
+                mac_address=mac_address,
+                mac_vendor=mac_vendor,
                 hostname=hostname,
-                ports=ports or []
+                ports=ports or [],
+                tested_surfaces=["network"] if ports else []
             )
             self._hosts[host_id] = target
             self.emit_event("host_discovered", {"host_id": host_id, "ip": ip})
@@ -119,6 +156,12 @@ class SharedState:
         flag: Optional[str] = None
     ) -> Finding:
         with self._lock:
+            # Hard Scope Gatekeeper check: Reject out-of-scope finding writes
+            if self.scope_gate and not self.scope_gate.is_in_scope(host_ip, port):
+                msg = f"SCOPE VIOLATION BLOCKED: Finding for host {host_ip}:{port} is OUT OF SCOPE. Write rejected."
+                logger.critical(msg)
+                raise ScopeViolationError(msg)
+
             # Deduplication: check if same type & target already exists
             for f in self._findings.values():
                 if f.host_id == host_id and f.port == port and f.finding_type == finding_type:
@@ -152,9 +195,16 @@ class SharedState:
                 return [f for f in self._findings.values() if f.host_id == host_id]
             return list(self._findings.values())
 
-    def verify_finding(self, finding_id: str, verified: bool, extra_evidence: Optional[str] = None) -> bool:
+    def verify_finding(
+        self,
+        finding_id: str,
+        verified: bool,
+        extra_evidence: Optional[str] = None,
+        ptes_phase: Optional[PTESPhase] = None
+    ) -> bool:
         """
         Updates finding status to CONFIRMED (FR-6 verification logic).
+        Optionally updates the finding's PTES phase.
         """
         with self._lock:
             finding = self._findings.get(finding_id)
@@ -163,6 +213,8 @@ class SharedState:
 
             finding.verified = verified
             finding.status = FindingStatus.CONFIRMED if verified else FindingStatus.FLAGGED
+            if ptes_phase is not None:
+                finding.ptes_phase = ptes_phase
             if extra_evidence:
                 finding.evidence = f"{finding.evidence}\n[VERIFICATION]: {extra_evidence}"
             return True

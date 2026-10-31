@@ -1,3 +1,4 @@
+import re
 import urllib.request
 import urllib.parse
 import uuid
@@ -60,9 +61,64 @@ class VerificationAgent(BaseAgent):
             if finding.finding_type == "exposed_path":
                 self._verify_exposed_path(finding, canary_code, canary_body)
 
+    @staticmethod
+    def _detect_sensitive_content(target_url: str, body: str) -> Optional[str]:
+        """
+        Determines whether actual sensitive data/content was read from the response,
+        warranting the PTES Exploitation phase label (vs merely Vulnerability Analysis).
+        """
+        if not body:
+            return None
+
+        lower_body = body.lower()
+        lower_url = target_url.lower()
+
+        # Check for planted CTF flags
+        flag_match = re.search(r"(flag\{[^\s\}]+\}|CTF\{[^\s\}]+\})", body, re.IGNORECASE)
+        if flag_match:
+            return f"Planted CTF flag read from endpoint: {flag_match.group(1)}"
+
+        # 1. Git repository config (.git/config)
+        if ".git" in lower_url:
+            if "[core]" in lower_body or "repositoryformatversion" in lower_body or "bare =" in lower_body:
+                return "Exposed Git repository configuration ([core] section verified)"
+
+        # 2. Environment files (.env)
+        if ".env" in lower_url:
+            env_keywords = ["db_password", "secret_key", "api_key", "app_key", "database_url", "aws_secret", "jwt_secret", "password", "secret"]
+            if any(kw in lower_body for kw in env_keywords) or re.search(r"^[a-zA-Z0-9_]+\s*=\s*\S+", body, re.MULTILINE):
+                return "Exposed environment configuration with key-value parameters"
+
+        # 3. AWS credentials (.aws/credentials)
+        if ".aws" in lower_url or "credentials" in lower_url:
+            if "aws_access_key_id" in lower_body or "aws_secret_access_key" in lower_body or "[default]" in lower_body:
+                return "Exposed AWS credentials file ([default] profile or access keys)"
+
+        # 4. Configuration backups (config.php.bak, wp-config.php.bak, admin/config)
+        if any(p in lower_url for p in ["config.php", "wp-config", "admin/config", ".bak"]):
+            php_indicators = ["<?php", "define(", "db_password", "db_name", "db_user", "$db[", "$config"]
+            if any(ind in lower_body for ind in php_indicators):
+                return "Exposed application configuration file containing source directives/credentials"
+
+        # 5. Apache server-status (/server-status)
+        if "server-status" in lower_url:
+            if "apache server status" in lower_body or "server uptime" in lower_body or "total accesses:" in lower_body:
+                return "Exposed Apache server-status metrics and client connections"
+
+        # 6. Backup directories (/backup)
+        if "/backup" in lower_url:
+            backup_indicators = ["index of /backup", ".tar", ".zip", ".sql", ".bak", "parent directory"]
+            if any(ind in lower_body for ind in backup_indicators):
+                return "Exposed directory listing or archive index in backup path"
+
+        return None
+
     def _verify_exposed_path(self, finding: Finding, canary_code: int, canary_body: str) -> None:
         """
         Proves whether an exposed path is genuine or a soft-404 false alarm.
+        Classifies PTES phase based on whether sensitive content was actually read:
+        - Real sensitive content read (credentials, secrets, config, source): EXPLOITATION
+        - Accessible path returning 200 without sensitive content leak: VULNERABILITY_ANALYSIS
         """
         # Extract target URL from evidence
         lines = finding.evidence.split("\n")
@@ -93,15 +149,41 @@ class VerificationAgent(BaseAgent):
             finding.status = FindingStatus.FLAGGED
             finding.evidence += "\n[VERIFIER]: Soft-404 false alarm detected. Target omitted from confirmed findings."
         else:
-            # Finding is proven! Upgrade to CONFIRMED
-            self.logger.info(f"FINDING CONFIRMED (FR-6): Path {target_url} verified as authentic.")
-            self.state.verify_finding(
-                finding_id=finding.id,
-                verified=True,
-                extra_evidence=f"Active verification confirmed HTTP 200 with authentic distinct content (length: {len(body)} bytes)."
-            )
-            self.log_ptes_action(
-                host_ip=finding.host_ip,
-                phase=PTESPhase.EXPLOITATION,
-                action=f"Weakness confirmed: {finding.title}"
-            )
+            sensitive_desc = self._detect_sensitive_content(target_url, body)
+            if sensitive_desc:
+                # Real sensitive content actually read -> EXPLOITATION phase
+                self.logger.info(f"SENSITIVE DATA EXPOSED (EXPLOITATION): {target_url} - {sensitive_desc}")
+                self.state.verify_finding(
+                    finding_id=finding.id,
+                    verified=True,
+                    extra_evidence=(
+                        f"Active verification confirmed HTTP 200 with authentic distinct content (length: {len(body)} bytes).\n"
+                        f"[SENSITIVE DATA EXPOSED]: {sensitive_desc}"
+                    ),
+                    ptes_phase=PTESPhase.EXPLOITATION
+                )
+                self.log_ptes_action(
+                    host_ip=finding.host_ip,
+                    phase=PTESPhase.EXPLOITATION,
+                    action=f"Sensitive Data Read: {finding.title}",
+                    details=f"{sensitive_desc} from {target_url}"
+                )
+            else:
+                # Open path verified, but no sensitive content read -> VULNERABILITY_ANALYSIS phase
+                self.logger.info(f"EXPOSED PATH CONFIRMED (VULNERABILITY ANALYSIS): {target_url}")
+                self.state.verify_finding(
+                    finding_id=finding.id,
+                    verified=True,
+                    extra_evidence=(
+                        f"Active verification confirmed HTTP 200 with authentic distinct content (length: {len(body)} bytes). "
+                        f"Endpoint is accessible without authentication (no direct secrets/credentials read from body)."
+                    ),
+                    ptes_phase=PTESPhase.VULNERABILITY_ANALYSIS
+                )
+                self.log_ptes_action(
+                    host_ip=finding.host_ip,
+                    phase=PTESPhase.VULNERABILITY_ANALYSIS,
+                    action=f"Weakness Confirmed: {finding.title}",
+                    details=f"Path {target_url} returned HTTP 200 without authentication"
+                )
+

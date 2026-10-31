@@ -1,6 +1,6 @@
 import unittest
-from unittest.mock import MagicMock
-from cyberforge.core.models import TargetHost, PortService, SurfaceType, FindingStatus
+from unittest.mock import MagicMock, patch
+from cyberforge.core.models import TargetHost, PortService, SurfaceType, FindingStatus, PTESPhase
 from cyberforge.core.scope_gate import ScopeGate
 from cyberforge.core.state import SharedState
 from cyberforge.core.config import AgentConfig
@@ -54,7 +54,7 @@ class TestWebAgent(unittest.TestCase):
         )
 
         # Mock responses from _fetch
-        def mock_fetch(url: str):
+        def mock_fetch(url: str, *args, **kwargs):
             if url == "http://127.0.0.1:8080":
                 headers = {"Server": "Apache/2.4"}  # Omitting CSP, X-Frame-Options
                 body = """
@@ -83,8 +83,8 @@ class TestWebAgent(unittest.TestCase):
                 </html>
                 """
                 return (200, headers, body)
-            elif url == "http://127.0.0.1:8080/admin":
-                return (200, {}, "Admin dashboard")
+            elif url == "http://127.0.0.1:8080/.env":
+                return (200, {}, "APP_ENV=production\nDB_PASSWORD=secret123")
             return None
 
         agent._fetch = MagicMock(side_effect=mock_fetch)
@@ -116,6 +116,128 @@ class TestWebAgent(unittest.TestCase):
         self.assertEqual(flag_finding.flag, "flag{web_surface_ctf_solved_2026}")
         self.assertTrue(flag_finding.verified)
         self.assertEqual(flag_finding.status, FindingStatus.CONFIRMED)
+
+
+class TestSQLiCheck(unittest.TestCase):
+    """Unit tests for the _check_sqli method in WebAgent."""
+
+    def _make_agent(self, scope_ip="127.0.0.1", cidr="127.0.0.1/32"):
+        scope_gate = ScopeGate(allowed_cidrs=[cidr])
+        state = SharedState(scope_gate=scope_gate)
+        config = AgentConfig(
+            name="web_agent",
+            role="Web Surface Analyzer",
+            surface="web",
+            parameters={"request_timeout_seconds": 2},
+        )
+        agent = WebAgent(config, state, scope_gate)
+        return agent, state
+
+    def _make_host(self, state, ip="127.0.0.1"):
+        return state.register_or_update_host(
+            ip=ip,
+            ports=[PortService(port=80, protocol="tcp", service="http")],
+        )
+
+    def _basic_login_form(self, action="http://127.0.0.1:80/login"):
+        return {
+            "action": action,
+            "method": "POST",
+            "inputs": [
+                {"name": "username", "type": "text", "value": ""},
+                {"name": "password", "type": "password", "value": ""},
+            ],
+        }
+
+    def test_db_error_disclosure_detected(self):
+        """A DB error string in the response triggers a sql_injection_error finding."""
+        agent, state = self._make_agent()
+        host = self._make_host(state)
+        form = self._basic_login_form()
+
+        # Baseline returns normal page; quote payload returns DB error
+        def mock_submit(action_url, method, inputs, override):
+            val = override.get("username", "")
+            if val == "'":
+                return (200, {}, "<html><body>You have an error in your SQL syntax near '''' at line 1</body></html>")
+            return (200, {}, "<html><body>Login</body></html>")
+
+        agent._submit_form = MagicMock(side_effect=mock_submit)
+        agent._check_sqli(host, 80, form, is_login=True)
+
+        findings = state.get_findings(host_id=host.host_id)
+        sqli_findings = [f for f in findings if f.finding_type == "sql_injection_error"]
+        self.assertEqual(len(sqli_findings), 1)
+        f = sqli_findings[0]
+        self.assertTrue(f.verified)
+        self.assertEqual(f.status, FindingStatus.CONFIRMED)
+        self.assertEqual(f.ptes_phase, PTESPhase.VULNERABILITY_ANALYSIS)
+        self.assertIn("'", f.evidence)              # payload in evidence
+        self.assertIn("username", f.evidence)       # field name in evidence
+        self.assertIn("sql", f.evidence.lower())    # matched error fragment in evidence
+
+    def test_auth_bypass_detected(self):
+        """An always-true tautology that produces a logged-in response triggers auth bypass finding."""
+        agent, state = self._make_agent()
+        host = self._make_host(state)
+        form = self._basic_login_form()
+
+        def mock_submit(action_url, method, inputs, override):
+            val = override.get("username", "")
+            # Tautology payloads return a "dashboard" page; others return login
+            if any(p in val for p in ("OR '1'='1", "OR 1=1", "admin'--")):
+                return (200, {}, "<html><body><a href='/logout'>Logout</a> Welcome to your dashboard!</body></html>")
+            return (200, {}, "<html><body>Login page</body></html>")
+
+        agent._submit_form = MagicMock(side_effect=mock_submit)
+        agent._check_sqli(host, 80, form, is_login=True)
+
+        findings = state.get_findings(host_id=host.host_id)
+        bypass_findings = [f for f in findings if f.finding_type == "sql_injection_auth_bypass"]
+        self.assertEqual(len(bypass_findings), 1)
+        f = bypass_findings[0]
+        self.assertTrue(f.verified)
+        self.assertEqual(f.status, FindingStatus.CONFIRMED)
+        self.assertEqual(f.ptes_phase, PTESPhase.EXPLOITATION)
+        self.assertIn("username", f.evidence)
+
+    def test_no_finding_on_clean_form(self):
+        """No SQLi findings are raised when the form behaves normally for all payloads."""
+        agent, state = self._make_agent()
+        host = self._make_host(state)
+        form = self._basic_login_form()
+
+        def mock_submit(action_url, method, inputs, override):
+            return (200, {}, "<html><body>Invalid credentials</body></html>")
+
+        agent._submit_form = MagicMock(side_effect=mock_submit)
+        agent._check_sqli(host, 80, form, is_login=True)
+
+        findings = state.get_findings(host_id=host.host_id)
+        sqli_types = {f.finding_type for f in findings}
+        self.assertNotIn("sql_injection_error", sqli_types)
+        self.assertNotIn("sql_injection_auth_bypass", sqli_types)
+
+    def test_bypass_not_flagged_on_non_login_form(self):
+        """Auth bypass finding is NOT raised on a generic (non-login) form."""
+        agent, state = self._make_agent()
+        host = self._make_host(state)
+        # A search form — not a login form
+        form = {
+            "action": "http://127.0.0.1:80/search",
+            "method": "GET",
+            "inputs": [{"name": "q", "type": "text", "value": ""}],
+        }
+
+        def mock_submit(action_url, method, inputs, override):
+            return (200, {}, "<html><body>Welcome to your dashboard!</body></html>")
+
+        agent._submit_form = MagicMock(side_effect=mock_submit)
+        agent._check_sqli(host, 80, form, is_login=False)
+
+        findings = state.get_findings(host_id=host.host_id)
+        bypass_findings = [f for f in findings if f.finding_type == "sql_injection_auth_bypass"]
+        self.assertEqual(len(bypass_findings), 0)
 
 
 if __name__ == "__main__":

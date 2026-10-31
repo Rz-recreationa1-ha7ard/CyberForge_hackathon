@@ -26,11 +26,12 @@ class Orchestrator:
             allowed_cidrs=self.config.scope.allowed_cidrs,
             allowed_ports=self.config.scope.allowed_ports
         )
-        self.state = SharedState()
+        self.state = SharedState(scope_gate=self.scope_gate)
         self.reporter = ReportGenerator(
             state=self.state,
             project_name=self.config.project_name,
-            tier=self.config.tier
+            tier=self.config.tier,
+            allowed_cidrs=self.config.scope.allowed_cidrs
         )
         set_state_reference(self.state, self.reporter)
 
@@ -43,6 +44,7 @@ class Orchestrator:
         from cyberforge.agents.web_agent import WebAgent
         from cyberforge.agents.network_agent import NetworkDiscoveryAgent
         from cyberforge.agents.verification_agent import VerificationAgent
+        from cyberforge.agents.service_auth_agent import ServiceAuthAgent
 
         for agent_cfg in self.config.agents:
             if not agent_cfg.enabled:
@@ -56,6 +58,9 @@ class Orchestrator:
                 self.register_agent(agent)
             elif agent_cfg.name == "verification_agent":
                 agent = VerificationAgent(agent_cfg, self.state, self.scope_gate)
+                self.register_agent(agent)
+            elif agent_cfg.name == "service_auth_agent":
+                agent = ServiceAuthAgent(agent_cfg, self.state, self.scope_gate)
                 self.register_agent(agent)
 
     def register_agent(self, agent: BaseAgent) -> None:
@@ -76,6 +81,78 @@ class Orchestrator:
         self._server_thread = threading.Thread(target=run_server, daemon=True)
         self._server_thread.start()
         logger.info(f"API Server listening on http://{self.config.reporting.api_host}:{self.config.reporting.api_port}")
+
+    def load_latest_report(self) -> bool:
+        """
+        Loads findings, targets, and attack path from the latest saved JSON report into state.
+        Safeguard: strictly matches report's scope against currently configured scope.
+        """
+        import glob
+        import json
+        import os
+        from cyberforge.core.models import TargetHost, Finding, AttackPathStep
+
+        export_dir = self.config.reporting.export_dir
+        json_files = glob.glob(os.path.join(export_dir, "assessment_*.json"))
+        if not json_files:
+            logger.warning(f"No previous assessment reports found in {export_dir}")
+            return False
+
+        current_scope_set = set(self.config.scope.allowed_cidrs)
+        matching_files = []
+
+        # Sort candidate files newest to oldest
+        sorted_files = sorted(json_files, key=os.path.getmtime, reverse=True)
+        for filepath in sorted_files:
+            try:
+                with open(filepath, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+
+                # Check scope match in scope_summary or attack path
+                report_scope = data.get("scope_summary", {}).get("allowed_cidrs", [])
+                if not report_scope and data.get("attack_path"):
+                    # Fallback check from first attack path step details
+                    first_step_details = data["attack_path"][0].get("details", "")
+                    for cidr in self.config.scope.allowed_cidrs:
+                        if cidr in first_step_details:
+                            report_scope.append(cidr)
+
+                if set(report_scope) == current_scope_set or any(cidr in str(report_scope) for cidr in current_scope_set):
+                    matching_files.append((filepath, data))
+                    break  # Found newest matching report
+            except Exception as e:
+                logger.debug(f"Could not inspect report {filepath}: {e}")
+
+        if not matching_files:
+            logger.warning(
+                f"No previous assessment reports matching current scope {self.config.scope.allowed_cidrs} found in {export_dir}"
+            )
+            return False
+
+        latest_file, data = matching_files[0]
+        try:
+            with self.state._lock:
+                for h_dict in data.get("hosts", []):
+                    host = TargetHost.model_validate(h_dict)
+                    if host.ports and "network" not in host.tested_surfaces:
+                        host.tested_surfaces.insert(0, "network")
+                    self.state._hosts[host.host_id] = host
+
+                for f_dict in data.get("findings", []):
+                    finding = Finding.model_validate(f_dict)
+                    self.state._findings[finding.id] = finding
+
+                for s_dict in data.get("attack_path", []):
+                    step = AttackPathStep.model_validate(s_dict)
+                    self.state._attack_path.append(step)
+
+            logger.info(
+                f"Loaded {len(self.state._hosts)} hosts and {len(self.state._findings)} findings from scope-verified report {latest_file}"
+            )
+            return True
+        except Exception as e:
+            logger.error(f"Failed to load verified report {latest_file}: {e}")
+            return False
 
     def run_pipeline(self) -> None:
         """
@@ -106,12 +183,11 @@ class Orchestrator:
                 dummy_target = TargetHost(host_id="network-init", ip=cidr)
                 network_agent.execute(dummy_target)
 
-        # Step 2: Surface dispatch loop (Web, Binary)
+        # Step 2: Surface dispatch loop (Web Agent - Intelligence Gathering & App Analysis)
         hosts = self.state.list_hosts()
         logger.info(f"Discovered {len(hosts)} target hosts. Dispatching surface agents...")
 
         for host in hosts:
-            # Check for web services
             has_web = any(
                 p.port in (80, 443, 8080, 8000, 8443) or "http" in p.service.lower()
                 for p in host.ports
@@ -131,14 +207,24 @@ class Orchestrator:
                     binary_agent.execute(host)
                     self.state.mark_surface_tested(host.host_id, "binary")
 
-        # Step 3: Run verification engine if registered (FR-6)
+        # Step 3: Service authentication probe (FR-3 / FR-4 Collaborative Handoff)
+        # Consumes intelligence (passkeys, exposed artifacts) uncovered by Web Agent
+        hosts = self.state.list_hosts()
+        service_auth_agent = self._agent_registry.get("service_auth_agent")
+        if service_auth_agent:
+            logger.info(f"Dispatching Service Auth Agent against {len(hosts)} hosts with blackboard intel...")
+            for host in hosts:
+                if not self.state.is_surface_tested(host.host_id, "service_auth"):
+                    service_auth_agent.execute(host)
+
+        # Step 4: Run verification engine if registered (FR-6)
         verifier = self._agent_registry.get("verification_agent")
         if verifier:
             logger.info("Dispatching Verification Engine (FR-6) for unverified findings...")
             for host in hosts:
                 verifier.execute(host)
 
-        # Step 4: Final Reporting (FR-7)
+        # Step 5: Final Reporting (FR-7)
         logger.info("Generating assessment reports...")
         self.state.log_step(
             host_ip="localhost",

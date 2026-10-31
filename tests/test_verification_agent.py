@@ -58,6 +58,59 @@ class TestVerificationAgent(unittest.TestCase):
         self.assertTrue(verified_f.verified)
         self.assertEqual(verified_f.status, FindingStatus.CONFIRMED)
         self.assertIn("Active verification confirmed HTTP 200", verified_f.evidence)
+        # Simply finding an accessible path without secrets must remain Vulnerability Analysis
+        self.assertEqual(verified_f.ptes_phase, PTESPhase.VULNERABILITY_ANALYSIS)
+
+    def test_verify_sensitive_content_elevates_to_exploitation(self):
+        scope_gate = ScopeGate(allowed_cidrs=["192.168.60.0/24"])
+        state = SharedState()
+
+        config = AgentConfig(
+            name="verification_agent",
+            role="Verifier",
+            surface="web",
+            parameters={"timeout_seconds": 2}
+        )
+        agent = VerificationAgent(config, state, scope_gate)
+
+        host = state.register_or_update_host(
+            ip="192.168.60.25",
+            ports=[PortService(port=80, protocol="tcp", service="http")]
+        )
+
+        finding = state.add_finding(
+            host_id=host.host_id,
+            host_ip=host.ip,
+            port=80,
+            surface=SurfaceType.WEB,
+            ptes_phase=PTESPhase.VULNERABILITY_ANALYSIS,
+            finding_type="exposed_path",
+            title="Potentially Exposed Path: /.env",
+            description="Environment configuration file",
+            evidence="URL: http://192.168.60.25:80/.env returned HTTP 200",
+            verified=False,
+            status=FindingStatus.FLAGGED
+        )
+
+        # Mock fetch: Canary returns 404, /.env returns real credentials
+        def mock_fetch(url: str):
+            if "cf_canary" in url:
+                return (404, "404 Not Found")
+            elif "/.env" in url:
+                return (200, "APP_ENV=production\nDB_PASSWORD=secret_db_pass_2026\nSECRET_KEY=supersecretkey")
+            return None
+
+        agent._fetch = MagicMock(side_effect=mock_fetch)
+
+        # Run verification
+        agent.execute(host)
+
+        # Finding must be CONFIRMED and elevated to EXPLOITATION because sensitive content was read
+        verified_f = state.get_findings(host_id=host.host_id)[0]
+        self.assertTrue(verified_f.verified)
+        self.assertEqual(verified_f.status, FindingStatus.CONFIRMED)
+        self.assertEqual(verified_f.ptes_phase, PTESPhase.EXPLOITATION)
+        self.assertIn("[SENSITIVE DATA EXPOSED]", verified_f.evidence)
 
     def test_filter_soft_404_false_alarm(self):
         scope_gate = ScopeGate(allowed_cidrs=["192.168.60.0/24"])
@@ -109,3 +162,4 @@ class TestVerificationAgent(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+

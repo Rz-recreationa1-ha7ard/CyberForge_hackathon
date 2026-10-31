@@ -3,7 +3,7 @@
   "tier": "recon",
   "scope": {
     "allowed_cidrs": [
-      "192.168.60.0/24"
+      "192.168.60.139/32"
     ],
     "allowed_ports": null,
     "max_scan_timeout_seconds": 1200
@@ -20,9 +20,11 @@
       "role": "Network and Port Enumerator",
       "surface": "network",
       "enabled": true,
-      "triggers": ["startup"],
+      "triggers": [
+        "startup"
+      ],
       "parameters": {
-        "socket_timeout": 0.4,
+        "socket_timeout": 1.0,
         "max_threads": 50
       }
     },
@@ -31,10 +33,13 @@
       "role": "Web Application Surface Analyzer",
       "surface": "web",
       "enabled": true,
-      "triggers": ["service:http", "service:https"],
+      "triggers": [
+        "service:http",
+        "service:https"
+      ],
       "parameters": {
         "max_crawl_depth": 2,
-        "request_timeout_seconds": 3,
+        "request_timeout_seconds": 6,
         "user_agent": "CyberForge-Auditor/1.0"
       }
     },
@@ -43,9 +48,27 @@
       "role": "Finding Verification & False-Alarm Eliminator",
       "surface": "web",
       "enabled": true,
-      "triggers": ["finding:unverified"],
+      "triggers": [
+        "finding:unverified"
+      ],
       "parameters": {
-        "timeout_seconds": 3
+        "timeout_seconds": 6
+      }
+    },
+    {
+      "name": "service_auth_agent",
+      "role": "Service Default-Credential Probe",
+      "surface": "network",
+      "enabled": true,
+      "triggers": [
+        "service:mysql",
+        "service:postgresql",
+        "service:redis",
+        "service:smb",
+        "service:telnet"
+      ],
+      "parameters": {
+        "timeout_seconds": 6
       }
     }
   ]
