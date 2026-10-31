@@ -1,5 +1,7 @@
 import re
 import uuid
+import time
+import ipaddress
 import urllib.request
 import urllib.parse
 import urllib.error
@@ -80,8 +82,14 @@ class WebAgent(BaseAgent):
         self.user_agent = self.config.parameters.get("user_agent", "CyberForge-WebAgent/1.0")
         self.opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor())
 
-    def _fetch(self, url: str, extra_headers: Optional[Dict[str, str]] = None) -> Optional[tuple[int, Dict[str, str], str]]:
-        """Safely fetches a URL respecting scope and timeout."""
+    def _fetch(
+        self,
+        url: str,
+        extra_headers: Optional[Dict[str, str]] = None,
+        timeout: Optional[int] = None,
+        retries: int = 0
+    ) -> Optional[tuple[int, Dict[str, str], str]]:
+        """Safely fetches a URL respecting scope and timeout with optional retries."""
         parsed = urllib.parse.urlparse(url)
         host_ip = parsed.hostname or ""
         port = parsed.port or (443 if parsed.scheme == "https" else 80)
@@ -100,22 +108,29 @@ class WebAgent(BaseAgent):
             headers=headers
         )
 
-        try:
-            with self.opener.open(req, timeout=self.timeout) as resp:
-                status = resp.status
-                headers = {k: v for k, v in resp.headers.items()}
-                content_len = headers.get("content-length") or headers.get("Content-Length")
-                if content_len and content_len.isdigit() and int(content_len) > 5 * 1024 * 1024:
-                    return status, headers, ""
-                body = resp.read(512 * 1024).decode("utf-8", errors="replace")
-                return status, headers, body
-        except urllib.error.HTTPError as e:
-            headers = {k: v for k, v in e.headers.items()}
-            body = e.read().decode("utf-8", errors="replace") if hasattr(e, "read") else ""
-            return e.code, headers, body
-        except Exception as e:
-            self.logger.debug(f"Fetch failed for {url}: {e}")
-            return None
+        req_timeout = timeout or self.timeout
+        attempts = 1 + retries
+        for attempt in range(attempts):
+            try:
+                with self.opener.open(req, timeout=req_timeout) as resp:
+                    status = resp.status
+                    headers = {k: v for k, v in resp.headers.items()}
+                    content_len = headers.get("content-length") or headers.get("Content-Length")
+                    if content_len and content_len.isdigit() and int(content_len) > 5 * 1024 * 1024:
+                        return status, headers, ""
+                    body = resp.read(512 * 1024).decode("utf-8", errors="replace")
+                    return status, headers, body
+            except urllib.error.HTTPError as e:
+                headers = {k: v for k, v in e.headers.items()}
+                body = e.read().decode("utf-8", errors="replace") if hasattr(e, "read") else ""
+                return e.code, headers, body
+            except Exception as e:
+                if attempt < attempts - 1:
+                    time.sleep(1.0)
+                    continue
+                self.logger.debug(f"Fetch failed for {url}: {e}")
+                return None
+        return None
 
     def execute(self, host: TargetHost, **kwargs) -> None:
         """Analyzes web services discovered on the target host."""
@@ -140,8 +155,8 @@ class WebAgent(BaseAgent):
                 action=f"Web surface discovery initiated on {base_url}"
             )
 
-            # Step 1: Root page fetch & Header Security Audit
-            root_res = self._fetch(base_url)
+            # Step 1: Root page fetch & Header Security Audit (with retries to handle post-scan cooldown)
+            root_res = self._fetch(base_url, timeout=max(self.timeout, 5), retries=3)
             if not root_res:
                 self.logger.info(f"Host {host.ip}:{port} not responding to HTTP requests.")
                 continue
