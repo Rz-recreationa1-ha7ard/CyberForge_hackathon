@@ -20,7 +20,7 @@ docker compose up --build
 pip install -r requirements.txt
 
 # 2. Run the engine (defaults to Recon tier)
-python main.py --tier recon --cidr 192.168.1.0/24
+python main.py --tier recon --cidr 192.168.60.0/24
 ```
 
 Once running, access the live dashboard at:
