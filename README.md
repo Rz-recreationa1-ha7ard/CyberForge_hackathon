@@ -14,8 +14,7 @@ The framework deploys specialized agents across three attack surfaces (**Network
 pip install -r requirements.txt
 
 # 2. Run the engine against your target scope (e.g., lab subnet or specific host)
-python main.py --tier recon --cidr 192.168.60.0/24
-
+python main.py --tier recon --cidr 192.168.60.x/x
 # For a single host non-blocking run:
 python main.py --tier recon --cidr 192.168.60.139/32 --no-wait
 ```
