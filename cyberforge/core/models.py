@@ -53,6 +53,8 @@ class PortService(BaseModel):
 class TargetHost(BaseModel):
     host_id: str
     ip: str
+    mac_address: Optional[str] = None
+    mac_vendor: Optional[str] = None
     hostname: Optional[str] = None
     status: str = "up"
     ports: List[PortService] = Field(default_factory=list)

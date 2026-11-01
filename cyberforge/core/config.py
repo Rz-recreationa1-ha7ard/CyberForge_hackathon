@@ -13,7 +13,7 @@ except ImportError:
 
 
 class ScopeConfig(BaseModel):
-    allowed_cidrs: List[str] = Field(default_factory=lambda: ["127.0.0.1/32", "192.168.1.0/24"])
+    allowed_cidrs: List[str] = Field(default_factory=lambda: ["192.168.60.0/24"])
     allowed_ports: Optional[List[int]] = None
     max_scan_timeout_seconds: int = 1200  # 20 minutes for Great tier
 
@@ -54,6 +54,11 @@ def load_config(config_path: str = "config.json") -> EngineConfig:
             config_path = "config.yaml"
         else:
             return EngineConfig()
+
+    # If yaml was requested but pyyaml is not installed, fallback to config.json
+    if config_path.endswith((".yaml", ".yml")) and not (HAS_YAML and yaml):
+        if os.path.exists("config.json"):
+            config_path = "config.json"
 
     with open(config_path, "r", encoding="utf-8") as f:
         if config_path.endswith(".json"):

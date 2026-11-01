@@ -3,8 +3,7 @@
   "tier": "recon",
   "scope": {
     "allowed_cidrs": [
-      "127.0.0.1/32",
-      "192.168.1.0/24"
+      "192.168.60.139/32"
     ],
     "allowed_ports": null,
     "max_scan_timeout_seconds": 1200
@@ -21,10 +20,12 @@
       "role": "Network and Port Enumerator",
       "surface": "network",
       "enabled": true,
-      "triggers": ["startup"],
+      "triggers": [
+        "startup"
+      ],
       "parameters": {
-        "scan_speed": "fast",
-        "top_ports": 100
+        "socket_timeout": 1.0,
+        "max_threads": 50
       }
     },
     {
@@ -32,33 +33,43 @@
       "role": "Web Application Surface Analyzer",
       "surface": "web",
       "enabled": true,
-      "triggers": ["service:http", "service:https"],
+      "triggers": [
+        "service:http",
+        "service:https"
+      ],
       "parameters": {
         "max_crawl_depth": 2,
+        "request_timeout_seconds": 6,
         "user_agent": "CyberForge-Auditor/1.0"
       }
     },
     {
-      "name": "binary_agent",
-      "role": "Static Binary Analyzer",
-      "surface": "binary",
+      "name": "verification_agent",
+      "role": "Finding Verification & False-Alarm Eliminator",
+      "surface": "web",
       "enabled": true,
-      "triggers": ["asset:binary"],
+      "triggers": [
+        "finding:unverified"
+      ],
       "parameters": {
-        "inspect_strings": true,
-        "unsafe_functions": ["strcpy", "gets", "system"]
+        "timeout_seconds": 6
       }
     },
     {
-      "name": "verification_agent",
-      "role": "Finding Verification Engine",
+      "name": "service_auth_agent",
+      "role": "Service Default-Credential Probe",
       "surface": "network",
       "enabled": true,
-      "triggers": ["finding:unverified"],
+      "triggers": [
+        "service:mysql",
+        "service:postgresql",
+        "service:redis",
+        "service:smb",
+        "service:telnet"
+      ],
       "parameters": {
-        "retry_count": 2
+        "timeout_seconds": 6
       }
     }
   ]
 }
-
