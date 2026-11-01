@@ -86,7 +86,7 @@ def main():
     allowed_cidrs = data.get("scope_cidrs") or data.get("scope_summary", {}).get("allowed_cidrs", ["192.168.60.139/32"])
     reporter = ReportGenerator(
         state,
-        project_name=data.get("project_name", "CyberForge Assessment"),
+        project_name="LinkRunner Assessment",
         tier=data.get("tier", "recon"),
         allowed_cidrs=allowed_cidrs,
     )
@@ -94,7 +94,7 @@ def main():
     set_state_reference(state, reporter)
 
     print("\n" + "=" * 60)
-    print("  CyberForge Web Dashboard Running at: http://localhost:8000")
+    print("  LinkRunner Web Dashboard Running at: http://localhost:8000")
     print("  Press Ctrl+C to stop the server")
     print("=" * 60 + "\n")
 

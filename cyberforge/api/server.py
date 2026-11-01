@@ -6,7 +6,7 @@ from cyberforge.core.state import SharedState
 from cyberforge.reporting.generator import ReportGenerator
 
 app = FastAPI(
-    title="CyberForge Autonomous PTES Engine API",
+    title="LinkRunner Autonomous PTES Engine API",
     description="Unified API for querying discovered targets, verified findings, and attack paths.",
     version="1.0.0"
 )
@@ -74,7 +74,7 @@ def index_dashboard():
         flags_html += """
             <div style="background:#022c22; border:1px solid #166534; border-radius:6px; padding:1.25rem; margin-top:1rem;">
                 <h4 style="color:#86efac; margin-top:0; margin-bottom:0.75rem; font-size:1.1rem;">
-                    🔍 How CyberForge Got the Flag from <code>192.168.60.139/32</code> (Zero Human Intervention)
+                    🔍 How LinkRunner Got the Flag from <code>192.168.60.139/32</code> (Zero Human Intervention)
                 </h4>
                 <div style="display:flex; flex-direction:column; gap:0.85rem; font-size:0.95rem; color:#d1fae5;">
                     <div style="background:#064e3b; padding:0.85rem; border-radius:6px; border-left:4px solid #10b981;">
@@ -191,7 +191,7 @@ def index_dashboard():
     <!DOCTYPE html>
     <html>
     <head>
-        <title>CyberForge PTES Engine Dashboard</title>
+        <title>LinkRunner -- Multi-Agent PTES Engine Dashboard</title>
         <style>
             body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; margin: 2rem; background: #0f172a; color: #f8fafc; }}
             .card {{ background: #1e293b; border-radius: 8px; padding: 1.5rem; margin-bottom: 1.5rem; border: 1px solid #334155; }}
@@ -222,7 +222,7 @@ def index_dashboard():
     </head>
     <body>
         <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:1.5rem;">
-            <h1 style="margin:0;">🛡️ CyberForge -- Multi-Agent PTES Engine</h1>
+            <h1 style="margin:0;">🛡️ LinkRunner -- Multi-Agent PTES Engine</h1>
             <div style="display:flex; align-items:center; gap:8px;">
                 <button onclick="toggleFlags()" style="background:#10b981; color:#022c22; padding:8px 16px; border-radius:6px; font-weight:bold; border:none; cursor:pointer; font-size:0.95rem; box-shadow:0 0 12px rgba(16,185,129,0.4); display:flex; align-items:center; gap:6px;">
                     🚩 Flags? ({flags_count})
@@ -385,7 +385,7 @@ def get_report_json():
     return report_gen.generate_json_data()
 
 
-def render_report_html(md_text: str, project_name: str = "CyberForge Assessment") -> str:
+def render_report_html(md_text: str, project_name: str = "LinkRunner Assessment") -> str:
     # 1. Protect code blocks
     code_blocks = []
     def save_code(m):

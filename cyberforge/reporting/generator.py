@@ -96,7 +96,7 @@ class ReportGenerator:
     and maps the discovered attack path, evidence, and remediation (B-3).
     """
 
-    def __init__(self, state: SharedState, project_name: str = "CyberForge Assessment", tier: str = "recon", allowed_cidrs: Optional[List[str]] = None):
+    def __init__(self, state: SharedState, project_name: str = "LinkRunner Assessment", tier: str = "recon", allowed_cidrs: Optional[List[str]] = None):
         self.state = state
         self.project_name = project_name
         self.tier = tier

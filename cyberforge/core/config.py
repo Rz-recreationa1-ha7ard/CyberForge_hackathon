@@ -35,7 +35,7 @@ class ReportingConfig(BaseModel):
 
 
 class EngineConfig(BaseModel):
-    project_name: str = "CyberForge Autonomous PTES Engine"
+    project_name: str = "LinkRunner Autonomous PTES Engine"
     tier: str = "recon"
     scope: ScopeConfig = Field(default_factory=ScopeConfig)
     agents: List[AgentConfig] = Field(default_factory=list)
